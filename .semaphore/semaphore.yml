@@ -26,20 +26,14 @@ blocks:
       jobs:
         - name: sign
           commands:
+            - checkout
             - gpg --import /root/public.key
             - gpg --import /root/private.key
             - gpg --output artifact.txt.sig --detach-sign 1-signing/artifact.txt
             - artifact push job artifact.txt.sig
-        - name: verify
-          commands:
-            - gpg --import /root/public.key
-            - gpg --import /root/private.key
-            - gpg --verify artifact.txt.sig artifact.txt
+            - gpg --verify artifact.txt.sig 1-signing/artifact.txt
       secrets:
         - name: keys
-      prologue:
-        commands:
-          - checkout
   - name: SBOM
     dependencies:
       - Code signing
