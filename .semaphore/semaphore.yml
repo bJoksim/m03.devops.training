@@ -1,5 +1,5 @@
 version: v1.0
-name: "\U0001F31F Fan-In/Fan-Out Pipeline"
+name: CI Pipeline
 agent:
   machine:
     type: a2-standard-4
@@ -20,105 +20,67 @@ auto_cancel:
   queued:
     when: branch = 'main'
 blocks:
-  - name: "\U0001F6E0️ Setup"
+  - name: Code signing
     dependencies: []
     task:
       jobs:
-        - name: "\U0001F4E6 Install Dependencies"
+        - name: sign
           commands:
-            - echo "Checking out code..."
-            - echo "Installing project dependencies..."
-            - echo "Setup completed successfully!"
-  - name: "\U0001F9EA Unit Tests"
+            - gpg --import /root/public.key
+            - gpg --import /root/private.key
+            - gpg --output artifact.txt.sig --detach-sign 1-signing/artifact.txt
+            - artifact push job artifact.txt.sig
+        - name: verify
+          commands:
+            - gpg --import /root/public.key
+            - gpg --import /root/private.key
+            - gpg --verify artifact.txt.sig artifact.txt
+      secrets:
+        - name: keys
+      prologue:
+        commands:
+          - checkout
+  - name: SBOM
     dependencies:
-      - "\U0001F6E0️ Setup"
+      - Code signing
     task:
       jobs:
-        - name: "\U0001F7E2 Run Unit Tests"
+        - name: Cyclonedx
           commands:
-            - echo "Running unit tests in container..."
-            - echo "Unit tests passed successfully!"
-  - name: "\U0001F50D Integration Tests"
+            - checkout
+            - pip install cyclonedx-bom
+            - cyclonedx-py 2-sbom/requirements -o bom.json
+            - artifact push project bom.json
+  - name: Audit dependencies
     dependencies:
-      - "\U0001F6E0️ Setup"
-    task:
-      env_vars:
-        - name: DATABASE_URL
-          value: 'postgresql://postgres@postgres:5432/test_db'
-        - name: REDIS_URL
-          value: 'redis://redis:6379'
-      jobs:
-        - name: "\U0001F504 Run Integration Tests"
-          commands:
-            - echo "Setting up test database..."
-            - echo "Running integration tests with PostgreSQL..."
-            - echo "Running cache tests with Redis..."
-            - echo "Integration tests passed successfully!"
-  - name: "\U0001F310 E2E Tests"
-    dependencies:
-      - "\U0001F6E0️ Setup"
+      - SBOM
     task:
       jobs:
-        - name: "\U0001F3AD Run E2E Tests"
+        - name: pip audit
           commands:
-            - echo "Starting containerized environment..."
-            - echo "Running end-to-end tests..."
-            - echo "E2E tests passed successfully!"
-  - name: ✨ Code Quality
+            - checkout
+            - pip install pip-audit
+            - pip-audit -r 3-dependancy-scanning/requirements.txt
+  - name: SAST Scan
     dependencies:
-      - "\U0001F6E0️ Setup"
+      - Audit dependencies
     task:
       jobs:
-        - name: "\U0001F50D Lint"
+        - name: Bandit
           commands:
-            - echo "Running code linting in container..."
-            - echo "Linting passed successfully!"
-        - name: "\U0001F4CA Type Check"
-          commands:
-            - echo "Running type checks in container..."
-            - echo "Type checking passed successfully!"
-  - name: "\U0001F510 Security"
+            - checkout
+            - pip install bandit
+            - bandit -r 4-sast/vulnerable_script.py
+  - name: DAST Scan
     dependencies:
-      - "\U0001F6E0️ Setup"
+      - SAST Scan
     task:
       jobs:
-        - name: "\U0001F6E1️ Security Scan"
+        - name: wapiti
           commands:
-            - echo "Scanning container dependencies..."
-            - echo "Running container security checks..."
-            - echo "Security scan completed successfully!"
-  - name: "\U0001F4E6 Build"
-    dependencies:
-      - "\U0001F9EA Unit Tests"
-      - "\U0001F50D Integration Tests"
-      - "\U0001F310 E2E Tests"
-      - ✨ Code Quality
-      - "\U0001F510 Security"
-    task:
-      jobs:
-        - name: "\U0001F528 Build Production"
-          commands:
-            - echo "Building production Docker image..."
-            - echo "Running multi-stage build..."
-            - echo "Build completed successfully!"
-  - name: "\U0001F433 Docker"
-    dependencies:
-      - "\U0001F4E6 Build"
-    task:
-      jobs:
-        - name: "\U0001F4E6 Build and Push"
-          commands:
-            - echo "Logging into Docker registry..."
-            - echo "Pushing production image..."
-            - echo "Docker image published successfully!"
-  - name: "\U0001F680 Deploy"
-    dependencies:
-      - "\U0001F433 Docker"
-    task:
-      jobs:
-        - name: "\U0001F30D Deploy to Production"
-          commands:
-            - echo "Configuring deployment credentials..."
-            - echo "Updating container service..."
-            - echo "Rolling out new containers..."
-            - echo "Deployment completed successfully!"
+            - checkout
+            - pip install -r 5-dast/requirements.txt
+            - pip install wapiti3
+            - 'gunicorn -b 0.0.0.0:4000 app:app --daemon'
+            - 'wapiti -u http://localhost:4000 -f html'
+            - artifact push project /root/.wapiti/generated_report
